@@ -2,11 +2,12 @@ require 'abstract_unit'
 require 'active_support/core_ext/hash/conversions'
 require "fixtures/person"
 require "fixtures/street_address"
+require "active_model"
 
 ########################################################################
 # Testing the schema of your Active Resource models
 ########################################################################
-class SchemaTest < ActiveModel::TestCase
+class SchemaTest < ActiveSupport::TestCase
   def setup
     setup_response # find me in abstract_unit
   end

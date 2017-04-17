@@ -305,7 +305,13 @@ module ActiveResource
     class_attribute :_format
     class_attribute :_collection_parser
     class_attribute :include_format_in_path
-    self.include_format_in_path = true
+    class_attribute :response_resource_path
+    class_attribute :singular_resource
+    class_attribute :nested_attributes_as_hash
+
+    self.nested_attributes_as_hash = false
+    self.include_format_in_path    = true
+    self.singular_resource         = false
 
     class_attribute :connection_class
     self.connection_class = Connection
@@ -619,7 +625,7 @@ module ActiveResource
       # * <tt>:ssl_timeout</tt> -The SSL timeout in seconds.
       def ssl_options=(options)
         self._connection = nil
-        @ssl_options  = options
+        @ssl_options = options
       end
 
       # Returns the SSL options hash.
@@ -669,7 +675,11 @@ module ActiveResource
       attr_writer :collection_name
 
       def collection_name
-        @collection_name ||= ActiveSupport::Inflector.pluralize(element_name)
+        @collection_name ||= singular_resource ? element_name : resourcefull_collection
+      end
+
+      def resourcefull_collection
+        ActiveSupport::Inflector.pluralize(element_name)
       end
 
       attr_writer :primary_key
@@ -760,10 +770,9 @@ module ActiveResource
       #   # => /posts/5/comments/1.json?active=1
       #
       def element_path(id, prefix_options = {}, query_options = nil)
-        check_prefix_options(prefix_options)
+        return singular_element_path(prefix_options, query_options) if singular_resource
 
-        prefix_options, query_options = split_options(prefix_options) if query_options.nil?
-        "#{prefix(prefix_options)}#{collection_name}/#{URI.parser.escape id.to_s}#{format_extension}#{query_string(query_options)}"
+        resourcefull_element_path(id, prefix_options = {}, query_options = nil)
       end
 
       # Gets the new element path for REST resources.
@@ -784,6 +793,18 @@ module ActiveResource
       #   # => /posts/5/comments/new.json
       def new_element_path(prefix_options = {})
         "#{prefix(prefix_options)}#{collection_name}/new#{format_extension}"
+      end
+
+      def singular_element_path(prefix_options = {}, query_options = nil)
+        prefix_options, query_options = split_options(prefix_options) if query_options.nil?
+        "#{prefix(prefix_options)}#{collection_name}#{format_extension}#{query_string(query_options)}"
+      end
+
+      def resourcefull_element_path(id, prefix_options = {}, query_options = nil)
+        check_prefix_options(prefix_options)
+
+        prefix_options, query_options = split_options(prefix_options) if query_options.nil?
+        "#{prefix(prefix_options)}#{collection_name}/#{URI.parser.escape id.to_s}#{format_extension}#{query_string(query_options)}"
       end
 
       # Gets the collection path for the REST resources. If the +query_options+ parameter is omitted, Rails
@@ -1005,6 +1026,12 @@ module ActiveResource
 
       private
 
+        def response_item(path)
+          resource = format.decode(connection.get(path, headers).body)
+          resource = resource[response_resource_path] if response_resource_path
+          resource || {}
+        end
+
         def check_prefix_options(prefix_options)
           p_options = HashWithIndifferentAccess.new(prefix_options)
           prefix_parameters.each do |p|
@@ -1020,11 +1047,11 @@ module ActiveResource
               instantiate_collection(get(from, options[:params]), options[:params])
             when String
               path = "#{from}#{query_string(options[:params])}"
-              instantiate_collection(format.decode(connection.get(path, headers).body) || [], options[:params])
+              instantiate_collection(response_item(path) || [], options[:params])
             else
               prefix_options, query_options = split_options(options[:params])
               path = collection_path(prefix_options, query_options)
-              instantiate_collection( (format.decode(connection.get(path, headers).body) || []), query_options, prefix_options )
+              instantiate_collection(response_item(path) || [], query_options, prefix_options)
             end
           rescue ActiveResource::ResourceNotFound
             # Swallowing ResourceNotFound exceptions and return nil - as per
@@ -1040,7 +1067,7 @@ module ActiveResource
             instantiate_record(get(from, options[:params]))
           when String
             path = "#{from}#{query_string(options[:params])}"
-            instantiate_record(format.decode(connection.get(path, headers).body))
+            instantiate_record(response_item(path))
           end
         end
 
@@ -1048,7 +1075,7 @@ module ActiveResource
         def find_single(scope, options)
           prefix_options, query_options = split_options(options[:params])
           path = element_path(scope, prefix_options, query_options)
-          instantiate_record(format.decode(connection.get(path, headers).body), prefix_options)
+          instantiate_record(response_item(path), prefix_options)
         end
 
         def instantiate_collection(collection, original_params = {}, prefix_options = {})
@@ -1493,6 +1520,7 @@ module ActiveResource
       # Create (i.e., \save to the remote service) the \new resource.
       def create
         run_callbacks :create do
+          binding.pry
           connection.post(collection_path, encode, self.class.headers).tap do |response|
             self.id = id_from_response(response)
             load_attributes_from_response(response)
